@@ -103,7 +103,7 @@ internal/
 ## Related Projects
 
 - [siba](https://github.com/greyfolk99/siba) — Core engine + CLI
-- [siba-preview](https://github.com/greyfolk99/siba-preview) — VSCode extension
+- [siba-viewer](https://github.com/greyfolk99/siba-viewer) — VSCode extension
 
 ## License
 
