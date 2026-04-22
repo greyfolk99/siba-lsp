@@ -1,15 +1,15 @@
 # siba-lsp
 
-LSP server for [SIBA](https://github.com/greyfolk99/siba). Provides language intelligence for structured markdown documents.
+LSP + MCP server for [SIBA](https://github.com/greyfolk99/siba). Provides language intelligence for structured markdown documents.
 
 ## Architecture
 
-siba-lsp is fully decoupled from the SIBA core engine. It calls the `siba` CLI as a subprocess and translates JSON output into LSP protocol messages.
+siba-lsp is fully decoupled from the SIBA core engine. It calls the `siba` CLI as a subprocess and translates JSON output into LSP or MCP protocol messages.
 
 ```
-Editor (VSCode, Neovim, etc.)
-  ↕ LSP protocol (stdio)
-siba-lsp
+Editor / AI Agent
+  ↕ LSP protocol (stdio)    OR    MCP protocol (stdio)
+siba-lsp                          siba-lsp --mcp
   ↕ subprocess (JSON)
 siba CLI (--json mode)
 ```
@@ -35,17 +35,24 @@ go build -o siba-lsp ./cmd/siba-lsp
 ## Usage
 
 ```bash
-# Start LSP server (stdio)
+# Start LSP server (default, stdio)
 siba-lsp
+
+# Start MCP server (stdio)
+siba-lsp --mcp
 
 # With logging
 siba-lsp --log /tmp/siba-lsp.log
+siba-lsp --mcp --log /tmp/siba-mcp.log
+
+# Specify working directory
+siba-lsp --mcp --workdir /path/to/project
 
 # Version
 siba-lsp version
 ```
 
-## Features
+## LSP Features
 
 ### Diagnostics
 
@@ -61,12 +68,36 @@ Real-time validation on file open, change, and save. Calls `siba check --json` a
 
 On initialization, runs `siba check --json` on the entire workspace and publishes diagnostics for all files.
 
+## MCP Features
+
+### Tools
+
+| Tool | Description |
+|------|-------------|
+| `siba_check` | Check a file or workspace for errors. Returns diagnostics as JSON. |
+| `siba_render` | Render a document. Returns clean markdown. |
+| `siba_help` | Show SIBA syntax reference. Topics: directives, variables, templates, references, control, packages, types. |
+
+### MCP Configuration Example
+
+```json
+{
+  "mcpServers": {
+    "siba": {
+      "command": "siba-lsp",
+      "args": ["--mcp", "--workdir", "/path/to/project"]
+    }
+  }
+}
+```
+
 ## Project Structure
 
 ```
 internal/
   bridge/     Subprocess bridge to siba CLI (JSON parsing)
   lsp/        LSP server (protocol types, transport, server logic)
+  mcp/        MCP server (tool definitions, help text, protocol)
 ```
 
 ## Related Projects
