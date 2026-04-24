@@ -8,6 +8,13 @@ import (
 	"os/exec"
 )
 
+// JSONEnvelope is the common JSON output wrapper from siba CLI
+type JSONEnvelope struct {
+	OK     bool            `json:"ok"`
+	Data   json.RawMessage `json:"data"`
+	Errors json.RawMessage `json:"errors"`
+}
+
 // Diagnostic from siba check --json
 type Diagnostic struct {
 	File     string `json:"file"`
@@ -36,21 +43,20 @@ type CheckResult struct {
 
 // CheckWorkspaceResult from siba check --json (workspace)
 type CheckWorkspaceResult struct {
-	Root        string       `json:"root"`
-	Version     string       `json:"version"`
-	Documents   int          `json:"documents"`
-	Templates   int          `json:"templates"`
-	TotalErrors int          `json:"total_errors"`
-	TotalWarns  int          `json:"total_warnings"`
+	Root        string        `json:"root"`
+	Version     string        `json:"version"`
+	Documents   int           `json:"documents"`
+	Templates   int           `json:"templates"`
+	TotalErrors int           `json:"total_errors"`
+	TotalWarns  int           `json:"total_warnings"`
 	Files       []CheckResult `json:"files"`
-	Workspace   []Diagnostic `json:"workspace_diagnostics"`
+	Workspace   []Diagnostic  `json:"workspace_diagnostics"`
 }
 
-// RenderResult from siba render --json <file>
+// RenderResult from siba cat
 type RenderResult struct {
-	File    string `json:"file"`
-	Content string `json:"content"`
-	Error   string `json:"error"`
+	Content string
+	Error   string
 }
 
 // Bridge communicates with the siba CLI
@@ -67,18 +73,31 @@ func New(workDir string) *Bridge {
 	}
 }
 
+// unwrapEnvelope extracts data from JSON envelope {ok, data, errors}
+func unwrapEnvelope(stdout []byte) (json.RawMessage, error) {
+	var env JSONEnvelope
+	if err := json.Unmarshal(stdout, &env); err != nil {
+		return nil, fmt.Errorf("parse envelope: %w", err)
+	}
+	return env.Data, nil
+}
+
 // CheckFile runs siba check --json on a single file
 func (b *Bridge) CheckFile(path string) (*CheckResult, error) {
 	stdout, _, err := b.run("check", "--json", path)
 	if err != nil {
-		// siba exits 1 on errors but still produces JSON
 		if len(stdout) == 0 {
 			return nil, fmt.Errorf("siba check failed: %w", err)
 		}
 	}
 
+	data, err := unwrapEnvelope(stdout)
+	if err != nil {
+		return nil, err
+	}
+
 	var result CheckResult
-	if err := json.Unmarshal(stdout, &result); err != nil {
+	if err := json.Unmarshal(data, &result); err != nil {
 		return nil, fmt.Errorf("parse check result: %w", err)
 	}
 	return &result, nil
@@ -93,27 +112,67 @@ func (b *Bridge) CheckWorkspace() (*CheckWorkspaceResult, error) {
 		}
 	}
 
+	data, err := unwrapEnvelope(stdout)
+	if err != nil {
+		return nil, err
+	}
+
 	var result CheckWorkspaceResult
-	if err := json.Unmarshal(stdout, &result); err != nil {
+	if err := json.Unmarshal(data, &result); err != nil {
 		return nil, fmt.Errorf("parse workspace check result: %w", err)
 	}
 	return &result, nil
 }
 
-// RenderFile runs siba render --json on a single file
+// RenderFile runs siba cat on a single file (streaming render to stdout)
 func (b *Bridge) RenderFile(path string) (*RenderResult, error) {
-	stdout, _, err := b.run("render", "--json", path)
+	stdout, stderr, err := b.run("cat", path)
 	if err != nil {
-		if len(stdout) == 0 {
-			return nil, fmt.Errorf("siba render failed: %w", err)
+		errMsg := string(stderr)
+		if errMsg == "" {
+			errMsg = err.Error()
 		}
+		return &RenderResult{Error: errMsg}, nil
 	}
 
-	var result RenderResult
-	if err := json.Unmarshal(stdout, &result); err != nil {
-		return nil, fmt.Errorf("parse render result: %w", err)
+	return &RenderResult{Content: string(stdout)}, nil
+}
+
+// Ls runs siba ls --json
+func (b *Bridge) Ls() (json.RawMessage, error) {
+	stdout, _, err := b.run("ls", "--json")
+	if err != nil {
+		if len(stdout) == 0 {
+			return nil, fmt.Errorf("siba ls failed: %w", err)
+		}
 	}
-	return &result, nil
+	return unwrapEnvelope(stdout)
+}
+
+// Tree runs siba tree --json [file]
+func (b *Bridge) Tree(file string) (json.RawMessage, error) {
+	args := []string{"tree", "--json"}
+	if file != "" {
+		args = append(args, file)
+	}
+	stdout, _, err := b.run(args...)
+	if err != nil {
+		if len(stdout) == 0 {
+			return nil, fmt.Errorf("siba tree failed: %w", err)
+		}
+	}
+	return unwrapEnvelope(stdout)
+}
+
+// Find runs siba find --json <query>
+func (b *Bridge) Find(query string) (json.RawMessage, error) {
+	stdout, _, err := b.run("find", "--json", query)
+	if err != nil {
+		if len(stdout) == 0 {
+			return nil, fmt.Errorf("siba find failed: %w", err)
+		}
+	}
+	return unwrapEnvelope(stdout)
 }
 
 func (b *Bridge) run(args ...string) ([]byte, []byte, error) {

@@ -139,17 +139,57 @@ func (s *Server) handleToolsList(id interface{}) error {
 			},
 		},
 		{
-			Name:        "siba_render",
-			Description: "Render a SIBA document. Returns clean markdown with all directives processed.",
+			Name:        "siba_cat",
+			Description: "Render a SIBA document (streaming). Returns clean markdown with all directives processed.",
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{
 					"file": {
 						Type:        "string",
-						Description: "Path to the .md file to render.",
+						Description: "Path to the .md file to render. Use file.md#section for specific section.",
 					},
 				},
 				Required: []string{"file"},
+			},
+		},
+		{
+			Name:        "siba_ls",
+			Description: "List all documents and templates in the workspace, or symbols in a specific file.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"file": {
+						Type:        "string",
+						Description: "Path to a .md file. Omit for workspace-wide listing.",
+					},
+				},
+			},
+		},
+		{
+			Name:        "siba_tree",
+			Description: "Show heading tree for a file, or dependency tree for the workspace (--deps).",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"file": {
+						Type:        "string",
+						Description: "Path to a .md file. Omit for workspace overview.",
+					},
+				},
+			},
+		},
+		{
+			Name:        "siba_find",
+			Description: "Search the workspace for a keyword in document content.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"query": {
+						Type:        "string",
+						Description: "Search query.",
+					},
+				},
+				Required: []string{"query"},
 			},
 		},
 		{
@@ -184,8 +224,14 @@ func (s *Server) handleToolsCall(id interface{}, params json.RawMessage) error {
 	switch p.Name {
 	case "siba_check":
 		return s.toolCheck(id, p.Arguments)
-	case "siba_render":
-		return s.toolRender(id, p.Arguments)
+	case "siba_cat":
+		return s.toolCat(id, p.Arguments)
+	case "siba_ls":
+		return s.toolLs(id, p.Arguments)
+	case "siba_tree":
+		return s.toolTree(id, p.Arguments)
+	case "siba_find":
+		return s.toolFind(id, p.Arguments)
 	case "siba_help":
 		return s.toolHelp(id, p.Arguments)
 	default:
@@ -225,7 +271,7 @@ func (s *Server) toolCheck(id interface{}, args map[string]interface{}) error {
 	return s.textResult(id, string(resultJSON), false)
 }
 
-func (s *Server) toolRender(id interface{}, args map[string]interface{}) error {
+func (s *Server) toolCat(id interface{}, args map[string]interface{}) error {
 	file, ok := args["file"].(string)
 	if !ok || file == "" {
 		return s.textResult(id, "file parameter is required", true)
@@ -241,6 +287,35 @@ func (s *Server) toolRender(id interface{}, args map[string]interface{}) error {
 	}
 
 	return s.textResult(id, result.Content, false)
+}
+
+func (s *Server) toolLs(id interface{}, args map[string]interface{}) error {
+	data, err := s.bridge.Ls()
+	if err != nil {
+		return s.textResult(id, fmt.Sprintf("ls failed: %v", err), true)
+	}
+	return s.textResult(id, string(data), false)
+}
+
+func (s *Server) toolTree(id interface{}, args map[string]interface{}) error {
+	file, _ := args["file"].(string)
+	data, err := s.bridge.Tree(file)
+	if err != nil {
+		return s.textResult(id, fmt.Sprintf("tree failed: %v", err), true)
+	}
+	return s.textResult(id, string(data), false)
+}
+
+func (s *Server) toolFind(id interface{}, args map[string]interface{}) error {
+	query, ok := args["query"].(string)
+	if !ok || query == "" {
+		return s.textResult(id, "query parameter is required", true)
+	}
+	data, err := s.bridge.Find(query)
+	if err != nil {
+		return s.textResult(id, fmt.Sprintf("find failed: %v", err), true)
+	}
+	return s.textResult(id, string(data), false)
 }
 
 func (s *Server) toolHelp(id interface{}, args map[string]interface{}) error {
