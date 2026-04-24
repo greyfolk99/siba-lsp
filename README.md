@@ -75,7 +75,10 @@ On initialization, runs `siba check --json` on the entire workspace and publishe
 | Tool | Description |
 |------|-------------|
 | `siba_check` | Check a file or workspace for errors. Returns diagnostics as JSON. |
-| `siba_render` | Render a document. Returns clean markdown. |
+| `siba_cat` | Render a document (streaming). Use `file.md#section` for specific section. |
+| `siba_ls` | List all documents/templates in workspace, or symbols in a file. |
+| `siba_tree` | Show heading tree for a file. |
+| `siba_find` | Search workspace for a keyword. |
 | `siba_help` | Show SIBA syntax reference. Topics: directives, variables, templates, references, control, packages, types. |
 
 ### MCP Configuration Example
