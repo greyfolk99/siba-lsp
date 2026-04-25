@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/hjseo/siba-lsp/internal/bridge"
+	"github.com/greyfolk99/siba-lsp/internal/bridge"
 )
 
 // Server is the SIBA LSP server (calls siba CLI via bridge)

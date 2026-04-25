@@ -9,8 +9,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/hjseo/siba-lsp/internal/bridge"
-	"github.com/hjseo/siba-lsp/internal/lsp"
+	"github.com/greyfolk99/siba-lsp/internal/bridge"
+	"github.com/greyfolk99/siba-lsp/internal/lsp"
 )
 
 // Server is the SIBA MCP server. Exposes siba CLI tools via MCP protocol.
