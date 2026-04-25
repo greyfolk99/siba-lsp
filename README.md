@@ -21,7 +21,7 @@ No shared Go packages. No import dependencies. Communication is purely through J
 Requires `siba` CLI to be installed and available in PATH.
 
 ```bash
-go install github.com/hjseo/siba-lsp/cmd/siba-lsp@latest
+go install github.com/greyfolk99/siba-lsp/cmd/siba-lsp@latest
 ```
 
 Or build from source:
