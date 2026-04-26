@@ -4,17 +4,15 @@ LSP + MCP server for [SIBA](https://github.com/greyfolk99/siba). Provides langua
 
 ## Architecture
 
-siba-lsp is fully decoupled from the SIBA core engine. It calls the `siba` CLI as a subprocess and translates JSON output into LSP or MCP protocol messages.
+siba-lsp directly imports the siba core engine (`siba/pkg/*`). In-process parsing and validation — no subprocess, no JSON bridge.
 
 ```
 Editor / AI Agent
   ↕ LSP protocol (stdio)    OR    MCP protocol (stdio)
 siba-lsp                          siba-lsp --mcp
-  ↕ subprocess (JSON)
-siba CLI (--json mode)
+  ↓ direct import
+siba/pkg (parser, scope, render, validate)
 ```
-
-No shared Go packages. No import dependencies. Communication is purely through JSON over subprocess pipes.
 
 ## Install
 
@@ -98,7 +96,7 @@ On initialization, runs `siba check --json` on the entire workspace and publishe
 
 ```
 internal/
-  bridge/     Subprocess bridge to siba CLI (JSON parsing)
+  bridge/     In-process bridge to siba/pkg (direct import, no subprocess)
   lsp/        LSP server (protocol types, transport, server logic)
   mcp/        MCP server (tool definitions, help text, protocol)
 ```

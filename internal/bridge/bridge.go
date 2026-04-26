@@ -1,21 +1,21 @@
-// Package bridge calls the siba CLI as a subprocess and parses JSON output.
+// Package bridge provides an in-process interface to the siba core engine.
+// No subprocess — directly imports siba/pkg packages.
 package bridge
 
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
-	"os/exec"
+	"os"
+	"strings"
+
+	"github.com/greyfolk99/siba/pkg/ast"
+	"github.com/greyfolk99/siba/pkg/parser"
+	"github.com/greyfolk99/siba/pkg/render"
+	"github.com/greyfolk99/siba/pkg/validate"
+	"github.com/greyfolk99/siba/pkg/workspace"
 )
 
-// JSONEnvelope is the common JSON output wrapper from siba CLI
-type JSONEnvelope struct {
-	OK     bool            `json:"ok"`
-	Data   json.RawMessage `json:"data"`
-	Errors json.RawMessage `json:"errors"`
-}
-
-// Diagnostic from siba check --json
+// Diagnostic mirrors ast.Diagnostic for external consumers
 type Diagnostic struct {
 	File     string `json:"file"`
 	Line     int    `json:"line"`
@@ -27,7 +27,7 @@ type Diagnostic struct {
 	Message  string `json:"message"`
 }
 
-// CheckResult from siba check --json <file>
+// CheckResult for single file check
 type CheckResult struct {
 	File        string       `json:"file"`
 	DocName     string       `json:"doc_name"`
@@ -41,7 +41,7 @@ type CheckResult struct {
 	Diagnostics []Diagnostic `json:"diagnostics"`
 }
 
-// CheckWorkspaceResult from siba check --json (workspace)
+// CheckWorkspaceResult for workspace-wide check
 type CheckWorkspaceResult struct {
 	Root        string        `json:"root"`
 	Version     string        `json:"version"`
@@ -53,136 +53,261 @@ type CheckWorkspaceResult struct {
 	Workspace   []Diagnostic  `json:"workspace_diagnostics"`
 }
 
-// RenderResult from siba cat
+// RenderResult for rendering
 type RenderResult struct {
 	Content string
 	Error   string
 }
 
-// Bridge communicates with the siba CLI
+// Bridge provides in-process access to the siba engine
 type Bridge struct {
-	SibaPath string // path to siba binary, default "siba"
-	WorkDir  string // working directory for siba commands
+	WorkDir   string
+	workspace *workspace.Workspace
 }
 
 // New creates a new Bridge
 func New(workDir string) *Bridge {
-	return &Bridge{
-		SibaPath: "siba",
-		WorkDir:  workDir,
+	return &Bridge{WorkDir: workDir}
+}
+
+func (b *Bridge) loadWorkspace() (*workspace.Workspace, error) {
+	if b.workspace != nil {
+		return b.workspace, nil
+	}
+	ws, err := workspace.LoadWorkspace(b.WorkDir)
+	if err != nil {
+		return nil, err
+	}
+	b.workspace = ws
+	return ws, nil
+}
+
+// RefreshFile re-parses a single file in the workspace
+func (b *Bridge) RefreshFile(path string, source string) {
+	if b.workspace != nil {
+		b.workspace.RefreshDocument(path, source)
 	}
 }
 
-// unwrapEnvelope extracts data from JSON envelope {ok, data, errors}
-func unwrapEnvelope(stdout []byte) (json.RawMessage, error) {
-	var env JSONEnvelope
-	if err := json.Unmarshal(stdout, &env); err != nil {
-		return nil, fmt.Errorf("parse envelope: %w", err)
-	}
-	return env.Data, nil
-}
-
-// CheckFile runs siba check --json on a single file
+// CheckFile validates a single document
 func (b *Bridge) CheckFile(path string) (*CheckResult, error) {
-	stdout, _, err := b.run("check", "--json", path)
-	if err != nil {
-		if len(stdout) == 0 {
-			return nil, fmt.Errorf("siba check failed: %w", err)
-		}
-	}
-
-	data, err := unwrapEnvelope(stdout)
+	ws, err := b.loadWorkspace()
 	if err != nil {
 		return nil, err
 	}
 
-	var result CheckResult
-	if err := json.Unmarshal(data, &result); err != nil {
-		return nil, fmt.Errorf("parse check result: %w", err)
+	doc := ws.GetDocumentByPath(path)
+	if doc == nil {
+		// try parsing directly
+		source, err := readFile(b.WorkDir, path)
+		if err != nil {
+			return nil, err
+		}
+		doc = parser.ParseDocument(path, source)
 	}
-	return &result, nil
+
+	allDiags := doc.Diagnostics
+	allDiags = append(allDiags, validate.ValidateDocument(doc, ws)...)
+
+	return buildCheckResult(path, doc, allDiags), nil
 }
 
-// CheckWorkspace runs siba check --json on the whole workspace
+// CheckWorkspace validates the entire workspace
 func (b *Bridge) CheckWorkspace() (*CheckWorkspaceResult, error) {
-	stdout, _, err := b.run("check", "--json")
-	if err != nil {
-		if len(stdout) == 0 {
-			return nil, fmt.Errorf("siba check failed: %w", err)
-		}
-	}
-
-	data, err := unwrapEnvelope(stdout)
+	ws, err := b.loadWorkspace()
 	if err != nil {
 		return nil, err
 	}
 
-	var result CheckWorkspaceResult
-	if err := json.Unmarshal(data, &result); err != nil {
-		return nil, fmt.Errorf("parse workspace check result: %w", err)
+	fileDiags, wsDiags := validate.ValidateWorkspace(ws)
+
+	result := &CheckWorkspaceResult{
+		Root:      b.WorkDir,
+		Version:   ws.GetVersion(),
+		Documents: len(ws.Documents),
+		Templates: len(ws.Templates),
 	}
-	return &result, nil
+
+	for path, doc := range ws.DocsByPath {
+		diags := fileDiags[path]
+		diags = append(diags, doc.Diagnostics...)
+		cr := buildCheckResult(path, doc, diags)
+		result.Files = append(result.Files, *cr)
+		result.TotalErrors += cr.Errors
+		result.TotalWarns += cr.Warnings
+	}
+
+	for _, d := range wsDiags {
+		result.Workspace = append(result.Workspace, convertDiag(d))
+		if d.Severity == ast.SeverityError {
+			result.TotalErrors++
+		}
+	}
+
+	return result, nil
 }
 
-// RenderFile runs siba cat on a single file (streaming render to stdout)
+// RenderFile renders a single document
 func (b *Bridge) RenderFile(path string) (*RenderResult, error) {
-	stdout, stderr, err := b.run("cat", path)
+	ws, _ := b.loadWorkspace()
+
+	source, err := readFile(b.WorkDir, path)
 	if err != nil {
-		errMsg := string(stderr)
-		if errMsg == "" {
-			errMsg = err.Error()
-		}
-		return &RenderResult{Error: errMsg}, nil
+		return &RenderResult{Error: err.Error()}, nil
 	}
 
-	return &RenderResult{Content: string(stdout)}, nil
+	doc := parser.ParseDocument(path, source)
+
+	var buf bytes.Buffer
+	if err := render.StreamRender(doc, &buf, ws); err != nil {
+		return &RenderResult{Error: err.Error()}, nil
+	}
+
+	return &RenderResult{Content: buf.String()}, nil
 }
 
-// Ls runs siba ls --json
+// Ls returns workspace listing as JSON
 func (b *Bridge) Ls() (json.RawMessage, error) {
-	stdout, _, err := b.run("ls", "--json")
+	ws, err := b.loadWorkspace()
 	if err != nil {
-		if len(stdout) == 0 {
-			return nil, fmt.Errorf("siba ls failed: %w", err)
-		}
+		return nil, err
 	}
-	return unwrapEnvelope(stdout)
+
+	type docInfo struct {
+		Name       string `json:"name"`
+		Path       string `json:"path"`
+		IsTemplate bool   `json:"is_template"`
+	}
+
+	var docs []docInfo
+	for name, doc := range ws.Templates {
+		docs = append(docs, docInfo{Name: name, Path: doc.Path, IsTemplate: true})
+	}
+	for name, doc := range ws.Documents {
+		docs = append(docs, docInfo{Name: name, Path: doc.Path, IsTemplate: false})
+	}
+
+	data, _ := json.Marshal(docs)
+	return data, nil
 }
 
-// Tree runs siba tree --json [file]
+// Tree returns heading tree as JSON
 func (b *Bridge) Tree(file string) (json.RawMessage, error) {
-	args := []string{"tree", "--json"}
+	ws, err := b.loadWorkspace()
+	if err != nil {
+		return nil, err
+	}
+
 	if file != "" {
-		args = append(args, file)
-	}
-	stdout, _, err := b.run(args...)
-	if err != nil {
-		if len(stdout) == 0 {
-			return nil, fmt.Errorf("siba tree failed: %w", err)
+		doc := ws.GetDocumentByPath(file)
+		if doc == nil {
+			return json.Marshal(nil)
 		}
+		return json.Marshal(doc.Headings)
 	}
-	return unwrapEnvelope(stdout)
+
+	result := make(map[string]interface{})
+	for path, doc := range ws.DocsByPath {
+		result[path] = doc.Headings
+	}
+	return json.Marshal(result)
 }
 
-// Find runs siba find --json <query>
+// Find searches workspace for a query
 func (b *Bridge) Find(query string) (json.RawMessage, error) {
-	stdout, _, err := b.run("find", "--json", query)
+	ws, err := b.loadWorkspace()
 	if err != nil {
-		if len(stdout) == 0 {
-			return nil, fmt.Errorf("siba find failed: %w", err)
+		return nil, err
+	}
+
+	type match struct {
+		File string `json:"file"`
+		Line int    `json:"line"`
+		Text string `json:"text"`
+	}
+
+	var matches []match
+	for path, doc := range ws.DocsByPath {
+		lines := strings.Split(doc.Source, "\n")
+		for i, line := range lines {
+			if strings.Contains(line, query) {
+				matches = append(matches, match{
+					File: path,
+					Line: i + 1,
+					Text: line,
+				})
+			}
 		}
 	}
-	return unwrapEnvelope(stdout)
+
+	return json.Marshal(matches)
 }
 
-func (b *Bridge) run(args ...string) ([]byte, []byte, error) {
-	cmd := exec.Command(b.SibaPath, args...)
-	cmd.Dir = b.WorkDir
+// --- helpers ---
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+func buildCheckResult(path string, doc *ast.Document, diags []ast.Diagnostic) *CheckResult {
+	cr := &CheckResult{
+		File:        path,
+		DocName:     doc.Name,
+		ExtendsName: doc.ExtendsName,
+		IsTemplate:  doc.IsTemplate,
+		Variables:   len(doc.Variables),
+		References:  len(doc.References),
+		Headings:    countHeadings(doc.Headings),
+	}
+	for _, d := range diags {
+		cr.Diagnostics = append(cr.Diagnostics, convertDiag(d))
+		switch d.Severity {
+		case ast.SeverityError:
+			cr.Errors++
+		case ast.SeverityWarning:
+			cr.Warnings++
+		}
+	}
+	if cr.Diagnostics == nil {
+		cr.Diagnostics = []Diagnostic{}
+	}
+	return cr
+}
 
-	err := cmd.Run()
-	return stdout.Bytes(), stderr.Bytes(), err
+func convertDiag(d ast.Diagnostic) Diagnostic {
+	sev := "error"
+	switch d.Severity {
+	case ast.SeverityWarning:
+		sev = "warning"
+	case ast.SeverityInfo:
+		sev = "info"
+	case ast.SeverityHint:
+		sev = "hint"
+	}
+	return Diagnostic{
+		File:     d.File,
+		Line:     d.Range.Start.Line,
+		Column:   d.Range.Start.Column,
+		EndLine:  d.Range.End.Line,
+		EndCol:   d.Range.End.Column,
+		Severity: sev,
+		Code:     d.Code,
+		Message:  d.Message,
+	}
+}
+
+func countHeadings(headings []*ast.Heading) int {
+	n := len(headings)
+	for _, h := range headings {
+		n += countHeadings(h.Children)
+	}
+	return n
+}
+
+func readFile(workDir, path string) (string, error) {
+	fullPath := path
+	if workDir != "" && !strings.HasPrefix(path, "/") {
+		fullPath = workDir + "/" + path
+	}
+	data, err := os.ReadFile(fullPath)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
 }
