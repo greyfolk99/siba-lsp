@@ -76,24 +76,28 @@ Heading hierarchy defines scope chain. Inner → outer lookup.`
 	case "references":
 		return `# SIBA References
 
-## Syntax: {{reference}}
+## Import (required for external access)
+<!-- @import alias from ./path.md -->
 
+## Local references
 | Pattern | Meaning |
 |---------|---------|
 | {{variable}} | Local variable (scope chain) |
-| {{#section}} | Section in same document |
-| {{doc-name}} | Another document by @doc name |
-| {{doc-name#section}} | Section in another document |
-| {{doc-name.variable}} | Root variable in another document |
-| {{path/to/file}} | Document by file path |
-| \{{literal}} | Escaped (outputs {{literal}}) |
+| {{obj.prop}} | Object property |
+| {{#section}} | Current file symbol (heading/doc/template) |
+| {{#parent/child}} | Nested symbol |
 
-## Resolution order (no /, #, or .):
-1. Local variable (scope chain)
-2. @doc name
+## External references (@import required)
+| Pattern | Meaning |
+|---------|---------|
+| {{alias.variable}} | Module-level variable from imported file |
+| {{alias#symbol}} | Symbol from imported file |
+| {{alias#parent/child}} | Nested symbol from imported file |
 
-## Cross-document variable access:
-Only root-level public variables are accessible.`
+## Escape
+\{{literal}} → outputs {{literal}}
+
+Note: direct {{doc-name.variable}} without @import is not supported.`
 
 	case "control":
 		return `# SIBA Control Flow
