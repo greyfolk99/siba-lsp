@@ -6,15 +6,29 @@ on:
   pull_request:
     branches: [main, develop]
 
+defaults:
+  run:
+    working-directory: siba-lsp
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout siba-lsp
+        uses: actions/checkout@v4
+        with:
+          path: siba-lsp
+      - name: Checkout sibling siba (for go.mod local replace)
+        uses: actions/checkout@v4
+        with:
+          repository: greyfolk99/siba
+          ref: develop
+          path: siba
       - uses: actions/setup-go@v5
         with:
           go-version: '1.25'
           cache: true
+          cache-dependency-path: siba-lsp/go.sum
       - name: go vet
         run: go vet ./...
       - name: go build
